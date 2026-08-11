@@ -1,3 +1,16 @@
+# Local configuration (copy from config.py.sample)
+config.py
+
+# Device auth credentials (on-device copy may exist for local test)
+auth.cfg
+
+# Cursor rules / local IDE settings
+.cursor/
+
+# Business manual (generated locally)
+manual/
+tools/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -202,6 +215,9 @@ cython_debug/
 # .vscode/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
+
+# Local backups (not version-controlled)
+local_backup/
 
 # Ruff stuff:
 .ruff_cache/

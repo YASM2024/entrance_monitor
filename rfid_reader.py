@@ -81,14 +81,8 @@ def read():
 
 
 # =========================
-# 認証判定
+# 認証判定（config.RFID_CARDS を参照）
 # =========================
-# ホワイトリスト（例）
-_WHITELIST = {
-    (22, 119, 76, 6, 43),   # ダミーUID
-}
-
-
 def is_valid(uid):
     """
     return:
@@ -97,4 +91,23 @@ def is_valid(uid):
     if uid is None:
         return False
 
-    return uid in _WHITELIST
+    import config
+    return uid in config.RFID_CARDS
+
+
+def owner_name(uid):
+    import config
+    if uid is None:
+        return None
+    return config.RFID_CARDS.get(uid)
+
+
+def format_log_uid(uid):
+    """ログ用: 所有者名と生UIDを併記。"""
+    if uid is None:
+        return "None"
+    name = owner_name(uid)
+    raw = str(uid)
+    if name:
+        return "{} {}".format(name, raw)
+    return raw

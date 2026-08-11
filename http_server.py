@@ -1,81 +1,20 @@
-import socket
-import time
-import os
-import _thread
-
+import socket, time, os, gc, _thread
 from logger import list_log_files, resolve_log_path
-import http_admin
-import config
+import http_admin, config
 
-
-# =========================
-# リクエスト読み取り
-# =========================
-def _recv_request(cl):
-    if config.ENABLE_REQ_SIZE_LIMIT:
-        max_size = config.HTTP_MAX_REQ_SIZE
-    else:
-        max_size = 2048
-
-    chunks = [cl.recv(1024)]
-    if not chunks[0]:
-        return ""
-
-    data = chunks[0]
-    while len(data) < max_size:
-        header_end = data.find(b"\r\n\r\n")
-        if header_end < 0:
-            chunk = cl.recv(256)
-            if not chunk:
-                break
-            data += chunk
-            continue
-
-        header = data[:header_end].decode()
-        content_length = 0
-        for line in header.split("\r\n"):
-            if line.lower().startswith("content-length:"):
-                try:
-                    content_length = int(line.split(":", 1)[1].strip())
-                except ValueError:
-                    content_length = 0
-                break
-
-        body_len = len(data) - (header_end + 4)
-        if content_length <= 0 or body_len >= content_length:
-            break
-
-        chunk = cl.recv(min(256, content_length - body_len))
-        if not chunk:
-            break
-        data += chunk
-
-    try:
-        return data.decode()
-    except UnicodeError:
-        return ""
-
-
-# =========================
-# 送信（部分送信対策）
-# =========================
-def _send_all(cl, data):
-    if isinstance(data, str):
-        data = data.encode("utf-8")
-    mv = memoryview(data)
-    while mv:
-        n = cl.send(mv)
-        if not n:
-            raise OSError("send failed")
-        mv = mv[n:]
-
-
-# =========================
-# 停止・再起動フラグ
-# =========================
+_DEF_MAX = 20480
 stop_flag = False
 reboot_requested = False
 last_access = 0
+_AUTH = "/storage/auth.cfg"
+
+
+def max_req_size():
+    try:
+        size = int(getattr(config, "HTTP_MAX_REQ_SIZE", _DEF_MAX))
+    except (TypeError, ValueError):
+        size = _DEF_MAX
+    return 1024 if size < 1024 else size
 
 
 def request_reboot():
@@ -87,167 +26,289 @@ def reboot_pending():
     return reboot_requested
 
 
-def server():
-    global last_access, stop_flag
+def _recv_request(cl):
+    mx = max_req_size()
+    gc.collect()
+    first = cl.recv(512)
+    if not first:
+        return b"", False
+    buf = first
+    while b"\r\n\r\n" not in buf and len(buf) < mx:
+        chunk = cl.recv(256)
+        if not chunk:
+            break
+        buf += chunk
+    he = buf.find(b"\r\n\r\n")
+    if he < 0:
+        return buf, len(buf) >= mx
+    clen = 0
+    for line in buf[:he].split(b"\r\n"):
+        if line.lower().startswith(b"content-length:"):
+            try:
+                clen = int(line.split(b":", 1)[1].strip())
+            except ValueError:
+                clen = 0
+            break
+    total = he + 4 + clen
+    if clen < 0 or total > mx:
+        return buf, True
+    if clen == 0:
+        return buf, False
+    out = bytearray(total)
+    n = len(buf) if len(buf) < total else total
+    out[:n] = buf[:n]
+    del buf
+    filled = n
+    gc.collect()
+    while filled < total:
+        need = total - filled
+        chunk = cl.recv(512 if need > 512 else need)
+        if not chunk:
+            break
+        out[filled:filled + len(chunk)] = chunk
+        filled += len(chunk)
+    if filled < total:
+        return out[:filled], False
+    return out, False
+
+
+def _hdr(hb, name):
+    p = name.lower() + b":"
+    for line in hb.split(b"\r\n"):
+        if line.lower().startswith(p):
+            return line.split(b":", 1)[1].strip().decode()
+    return ""
+
+
+def _send_all(cl, data):
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    mv = memoryview(data)
+    while mv:
+        n = cl.send(mv)
+        if not n:
+            raise OSError("send failed")
+        mv = mv[n:]
+
+
+def _send_text(cl, status, ctype, text):
+    body = text.encode("utf-8") if isinstance(text, str) else text
+    _send_all(
+        cl,
+        "{}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n".format(
+            status, ctype, len(body)
+        ),
+    )
+    _send_all(cl, body)
+
+
+def _plain(cl, code, msg):
+    _send_all(cl, "HTTP/1.0 {}\r\nConnection: close\r\n\r\n{}".format(code, msg))
+
+
+def _auth_ok(user, password):
     try:
-        addr = socket.getaddrinfo('0.0.0.0', 80)[0][-1]
+        with open(_AUTH, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line[0] == "#" or ":" not in line:
+                    continue
+                u, p = line.split(":", 1)
+                if u == user and p == password:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def _akey():
+    return ("?key=" + config.SECRET_KEY) if config.ENABLE_TOKEN_CHECK else ""
+
+
+def _handle_client(cl, remote):
+    global last_access
+    gc.collect()
+    if config.ENABLE_IP_FILTER and remote[0] != config.ALLOWED_IP:
+        return
+    if config.ENABLE_RATE_LIMIT:
+        now = time.time()
+        if now - last_access < config.HTTP_RATE_LIMIT_SEC:
+            return
+        last_access = now
+    if config.ENABLE_TIMEOUT:
+        cl.settimeout(config.HTTP_TIMEOUT_SEC)
+    try:
+        req, too_large = _recv_request(cl)
+    except OSError:
+        return
+    if not req:
+        return
+    if too_large:
+        code = "413 Too Large" if config.ENABLE_REQ_SIZE_LIMIT else "400 Bad Request"
+        _plain(cl, code, "too large max=%d" % max_req_size())
+        return
+
+    he = req.find(b"\r\n\r\n")
+    if he < 0:
+        hb, body = req, b""
+    else:
+        hb, body = req[:he], memoryview(req)[he + 4:]
+    try:
+        parts = hb.split(b"\r\n", 1)[0].decode().split(" ")
+        method = parts[0] if parts else "GET"
+        raw = parts[1] if len(parts) > 1 else "/"
+        path, query = (raw.split("?", 1) + [""])[:2] if "?" in raw else (raw, "")
+    except Exception:
+        method, path, query = "GET", "/", ""
+
+    if config.ENABLE_TOKEN_CHECK and path != "/":
+        if (b"key=" + config.SECRET_KEY.encode()) not in req:
+            _plain(cl, "403 Forbidden", "Forbidden")
+            return
+
+    ct = _hdr(hb, b"content-type")
+
+    if path.startswith("/admin"):
+        gc.collect()
+        if isinstance(body, memoryview):
+            body = bytes(body)
+        try:
+            del req
+            del hb
+        except NameError:
+            pass
+        gc.collect()
+        try:
+            result = http_admin.dispatch(method, path, body, ct, query)
+        except MemoryError:
+            gc.collect()
+            _plain(cl, "500 Internal Server Error", "OOM")
+            return
+        except Exception as e:
+            _plain(cl, "500 Internal Server Error", "Error: %s" % e)
+            return
+        try:
+            del body
+        except NameError:
+            pass
+        gc.collect()
+        if result is not None:
+            if not isinstance(result, (list, tuple)) or len(result) != 2:
+                _plain(cl, "500 Internal Server Error", "bad")
+                return
+            html, do_rb = result
+            if not isinstance(html, str):
+                if isinstance(html, (list, tuple)) and html and isinstance(html[0], str):
+                    html, do_rb = html[0], bool(html[1]) if len(html) > 1 else do_rb
+                else:
+                    _plain(cl, "500 Internal Server Error", "bad")
+                    return
+            _send_text(cl, "HTTP/1.0 200 OK", "text/html; charset=utf-8", html)
+            if do_rb:
+                request_reboot()
+            return
+
+    if path == "/":
+        if method == "POST":
+            p = http_admin._parse_form(body)
+            if _auth_ok(p.get("u", ""), p.get("p", "")):
+                dest = "/admin?key=" + config.SECRET_KEY
+                html = (
+                    "<html><head><meta charset=utf-8>"
+                    "<meta http-equiv=refresh content='0;url=%s'></head>"
+                    "<body>OK <a href='%s'>admin</a></body></html>" % (dest, dest)
+                )
+            else:
+                html = "<html><body>NG <a href='/'>back</a></body></html>"
+            _send_text(cl, "HTTP/1.0 200 OK", "text/html; charset=utf-8", html)
+            return
+        html = (
+            "<html><head><meta charset=utf-8>"
+            "<meta name=viewport content='width=device-width,initial-scale=1'>"
+            "</head><body><h2>Login</h2><form method=POST action=/>"
+            "<p>u <input name=u></p><p>p <input name=p type=password></p>"
+            "<p><button>login</button></p></form></body></html>"
+        )
+        _send_text(cl, "HTTP/1.0 200 OK", "text/html; charset=utf-8", html)
+        return
+
+    if path in ("/logs", "/logs/"):
+        k = _akey()
+        h = ["<html><body><h2>logs</h2><p><a href='/admin%s'>menu</a></p><ul>" % k]
+        for f in list_log_files():
+            h.append("<li><a href='/storage/%s%s'>%s</a></li>" % (f, k, f))
+        h.append("</ul></body></html>")
+        _send_text(cl, "HTTP/1.0 200 OK", "text/html; charset=utf-8", "".join(h))
+        return
+
+    if path.startswith("/storage/"):
+        fn = path.split("?")[0].rstrip("/").split("/")[-1]
+        fp = resolve_log_path(fn)
+        try:
+            size = os.stat(fp)[6]
+        except OSError:
+            _plain(cl, "404 Not Found", "missing")
+            return
+        _send_all(
+            cl,
+            'HTTP/1.0 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n'
+            'Content-Disposition: attachment; filename="%s"\r\n'
+            "Content-Length: %d\r\nConnection: close\r\n\r\n" % (fn, size),
+        )
+        with open(fp, "rb") as f:
+            while True:
+                chunk = f.read(512)
+                if not chunk:
+                    break
+                _send_all(cl, chunk)
+        return
+
+    _plain(cl, "404 Not Found", "Not found")
+
+
+def server():
+    global stop_flag
+    try:
+        addr = socket.getaddrinfo("0.0.0.0", 80)[0][-1]
         s = socket.socket()
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(addr)
         s.listen(1)
-        print("HTTP server started on port 80")
+        print("HTTP on :80")
     except Exception as e:
-        print("server() crashed:", e)
-        
-    # ====== メインループ ======
+        print("server fail:", e)
+        return
     while not stop_flag:
         try:
-            s.settimeout(1.0)  # 1秒ごとに stop_flag を確認
+            s.settimeout(1.0)
             cl, remote = s.accept()
-        except:
-            continue  # タイムアウト → stop_flag チェックへ戻る
-
-        client_ip = remote[0]
-
-        # ====== IP フィルタ ======
-        if config.ENABLE_IP_FILTER:
-            if client_ip != config.ALLOWED_IP:
-                cl.close()
-                continue
-
-        # ====== Rate Limit ======
-        if config.ENABLE_RATE_LIMIT:
-            now = time.time()
-            if now - last_access < config.HTTP_RATE_LIMIT_SEC:
-                cl.close()
-                continue
-            last_access = now
-
-        # ====== タイムアウト ======
-        if config.ENABLE_TIMEOUT:
-            cl.settimeout(config.HTTP_TIMEOUT_SEC)
-
-        # ====== リクエスト読み取り ======
-        try:
-            req_text = _recv_request(cl)
-        except OSError:
-            cl.close()
-            continue
-
-        # ====== トークン認証 ======
-        if config.ENABLE_TOKEN_CHECK:
-            if f"key={config.SECRET_KEY}" not in req_text:
-                _send_all(cl, "HTTP/1.0 403 Forbidden\r\n\r\nForbidden")
-                cl.close()
-                continue
-
-        # ====== リクエスト解析 ======
-        try:
-            request_line = req_text.split("\n")[0]
-            parts = request_line.split(" ")
-            method = parts[0] if parts else "GET"
-            path = parts[1].split("?")[0] if len(parts) > 1 else "/"
         except Exception:
-            method = "GET"
-            path = "/"
-
-        body_text = ""
-        if "\r\n\r\n" in req_text:
-            body_text = req_text.split("\r\n\r\n", 1)[1]
-
-        # ====== 管理メニュー ======
-        if path.startswith("/admin"):
-            result = http_admin.dispatch(method, path, body_text)
-            if result is not None:
-                html, do_reboot = result
-                body = html.encode("utf-8")
-                header = (
-                    "HTTP/1.0 200 OK\r\n"
-                    "Content-Type: text/html; charset=utf-8\r\n"
-                    "Content-Length: {}\r\n\r\n".format(len(body))
-                )
-                _send_all(cl, header)
-                _send_all(cl, body)
-                cl.close()
-                if do_reboot:
-                    request_reboot()
-                continue
-
-        # ====== ルート：ログ一覧 ======
-        if path == "/" or path.startswith("/?"):
-            files = list_log_files()
-
-            admin_link = "/admin"
-            if config.ENABLE_TOKEN_CHECK:
-                admin_link += "?key=" + config.SECRET_KEY
-
-            html = (
-                "<!DOCTYPE html><html><head>"
-                '<meta charset="utf-8">'
-                '<meta name="viewport" content="width=device-width,initial-scale=1">'
-                "<title>Log Files</title></head><body>"
-                "<h2>Log Files</h2>"
-                "<p><a href='{}'>管理メニュー</a></p><ul>"
-            ).format(admin_link)
-            for f in files:
-                if config.ENABLE_TOKEN_CHECK:
-                    html += f'<li><a href="/storage/{f}?key={config.SECRET_KEY}">{f}</a></li>'
-                else:
-                    html += f'<li><a href="/storage/{f}">{f}</a></li>'
-            html += "</ul></body></html>"
-
-            body = html.encode("utf-8")
-            header = (
-                "HTTP/1.0 200 OK\r\n"
-                "Content-Type: text/html; charset=utf-8\r\n"
-                "Content-Length: {}\r\n\r\n".format(len(body))
-            )
-            _send_all(cl, header)
-            _send_all(cl, body)
-            cl.close()
             continue
-
-        # ====== CSV ファイル返却 ======
-        if path.startswith("/storage/"):
-            filename = path.split("?")[0].lstrip("/").split("/")[-1]
-            filepath = resolve_log_path(filename)
-
+        try:
+            _handle_client(cl, remote)
+        except MemoryError:
             try:
-                size = os.stat(filepath)[6]
-            except OSError:
-                _send_all(cl, "HTTP/1.0 404 Not Found\r\n\r\nFile not found")
+                gc.collect()
+                _plain(cl, "500 Internal Server Error", "OOM")
+            except Exception:
+                pass
+        except Exception as e:
+            print("HTTP err:", e)
+            try:
+                _plain(cl, "500 Internal Server Error", "Error")
+            except Exception:
+                pass
+        finally:
+            try:
                 cl.close()
-                continue
-
-            header = (
-                "HTTP/1.0 200 OK\r\n"
-                "Content-Type: text/plain; charset=utf-8\r\n"
-                "Content-Disposition: attachment; filename=\"{}\"\r\n"
-                "Content-Length: {}\r\n\r\n".format(filename, size)
-            )
-            _send_all(cl, header)
-
-            with open(filepath, "rb") as f:
-                while True:
-                    chunk = f.read(1024)
-                    if not chunk:
-                        break
-                    _send_all(cl, chunk)
-
-            cl.close()
-            continue
-
-        # ====== その他 ======
-        _send_all(cl, "HTTP/1.0 404 Not Found\r\n\r\nNot found")
-        cl.close()
-
-    # ====== 停止処理 ======
+            except Exception:
+                pass
+            gc.collect()
     try:
         s.close()
-    except:
+    except Exception:
         pass
-
-    print("HTTP server stopped")
+    print("HTTP stop")
 
 
 def start_http_server():
@@ -255,12 +316,12 @@ def start_http_server():
     stop_flag = False
     try:
         _thread.start_new_thread(server, ())
-        print("HTTP server started")
+        print("HTTP start")
     except Exception as e:
-        print("thread start failed:", e)
+        print("thread fail:", e)
+
 
 def stop_http_server():
     global stop_flag
     stop_flag = True
-    print("HTTP server stopping...")
-
+    print("HTTP stopping")

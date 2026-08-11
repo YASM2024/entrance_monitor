@@ -1,0 +1,5 @@
+# このファイルを本体の /storage/auth.cfg にコピーして使います。
+# 形式: user:password（1行）
+# # で始まる行と空行は無視されます。
+
+admin:change-me

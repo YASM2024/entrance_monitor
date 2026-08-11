@@ -4,11 +4,12 @@ import rp2
 import config
 
 class WiFiManager:
-    def __init__(self, ssid, password, ip="192.168.4.1", subnet="255.255.255.0"):
+    def __init__(self, ssid, password, ip="192.168.4.1", subnet="255.255.255.0", txpower=None):
         self._ssid = ssid
         self._password = password
         self._ip = ip
         self._subnet = subnet
+        self._txpower = txpower
         self._wlan = network.WLAN(network.AP_IF)
 
     def init(self):
@@ -22,6 +23,8 @@ class WiFiManager:
 
         # AP 設定
         self._wlan.config(essid=self._ssid, password=self._password)
+        if self._txpower is not None:
+            self._wlan.config(txpower=self._txpower)
 
 
     @property
@@ -39,7 +42,8 @@ def start_wifi_ap():
         config.SSID,
         config.PASSWORD,
         config.IP,
-        config.SUBNET
+        config.SUBNET,
+        getattr(config, "TXPOWER", None),
     )
     wifi.init()
     print("AP started:", wifi.ip)

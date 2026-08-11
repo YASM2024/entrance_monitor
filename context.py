@@ -9,6 +9,8 @@ _ctx = {
     # -------------------------
     "exit_door_opened": False,
     "exit_door_cycle": False,
+    "exit_door_close_time": 0,
+    "exit_pir_seen": False,
     "last_pir_time": 0,
 
     # -------------------------
@@ -48,6 +50,8 @@ def reset():
 def reset_exit():
     _ctx["exit_door_opened"] = False
     _ctx["exit_door_cycle"] = False
+    _ctx["exit_door_close_time"] = 0
+    _ctx["exit_pir_seen"] = False
     _ctx["last_pir_time"] = 0
 
 
@@ -55,11 +59,19 @@ def mark_exit_open():
     _ctx["exit_door_opened"] = True
 
 
-def mark_exit_cycle():
+def mark_exit_door_closed():
     _ctx["exit_door_cycle"] = True
+    _ctx["exit_door_close_time"] = time.time()
+    _ctx["exit_pir_seen"] = False
 
 
-def update_pir():
+def note_exit_pir_before_close():
+    if not _ctx["exit_pir_seen"]:
+        _ctx["last_pir_time"] = time.time()
+        _ctx["exit_pir_seen"] = True
+
+
+def note_exit_pir_after_close():
     _ctx["last_pir_time"] = time.time()
 
 
@@ -101,6 +113,18 @@ def is_server_running():
 # =========================
 def get():
     return _ctx
+
+
+def exit_door_opened():
+    return _ctx["exit_door_opened"]
+
+
+def exit_door_cycle():
+    return _ctx["exit_door_cycle"]
+
+
+def exit_door_close_time():
+    return _ctx["exit_door_close_time"]
 
 
 def last_pir_time():

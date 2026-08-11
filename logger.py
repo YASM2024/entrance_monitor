@@ -188,6 +188,24 @@ def list_log_files():
     return files
 
 
+def delete_log_file(filename):
+    """
+    ログファイルを削除する。
+    filename は basename のみ（例: 20260101.csv）。
+    return: (ok:bool, path:str, error:str|None)
+    """
+    name = filename.replace("\\", "/").split("/")[-1].strip()
+    if not name or name in (".", "..") or not name.endswith(".csv"):
+        return False, "", "invalid name"
+
+    path = resolve_log_path(name)
+    try:
+        os.remove(path)
+        return True, path, None
+    except OSError as e:
+        return False, path, str(e)
+
+
 # =========================
 # ベースログ
 # =========================

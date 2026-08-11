@@ -6,6 +6,7 @@ import time
 _timers = {
     "OPEN": None,
     "AUTH": None,
+    "ENTRY_PENDING": None,
     "EXIT": None,
 }
 
@@ -16,6 +17,7 @@ def init():
     global _timers
     _timers["OPEN"] = None
     _timers["AUTH"] = None
+    _timers["ENTRY_PENDING"] = None
     _timers["EXIT"] = None
 
 
@@ -25,7 +27,7 @@ def init():
 def start(name, duration_sec):
     """
     name:
-        OPEN / AUTH / EXIT
+        OPEN / AUTH / ENTRY_PENDING / EXIT
     """
     _timers[name] = {
         "start": time.time(),
@@ -73,6 +75,13 @@ def check_timeouts():
     if _expired(_timers["AUTH"]):
         events.append("TIMEOUT_AUTH")
         _timers["AUTH"] = None
+
+    # -------------------------
+    # ENTRY_PENDINGタイムアウト
+    # -------------------------
+    if _expired(_timers["ENTRY_PENDING"]):
+        events.append("TIMEOUT_ENTRY_PENDING")
+        _timers["ENTRY_PENDING"] = None
 
     # -------------------------
     # EXITタイムアウト

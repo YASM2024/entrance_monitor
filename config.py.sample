@@ -1,0 +1,107 @@
+# このファイルを config.py にコピーして、環境に合わせて編集してください。
+#   cp config.py.sample config.py   （Unix）
+#   copy config.py.sample config.py （Windows）
+#
+# config.py は git 管理外です。スキーマ・デフォルトは本ファイルを正とします。
+
+# ============================
+# APの設定
+# ============================
+
+SSID     = "entrance-monitor"
+PASSWORD = "change-me"
+IP       = "192.168.4.1"
+SUBNET   = "255.255.255.0"
+# 送信電力 (dBm)。None ならチップ既定のまま。小さいほど弱い（例: 5〜15）
+TXPOWER  = None
+
+# ============================
+# セキュリティ機能 ON/OFF
+# IP / token / rate / timeout は対応する ENABLE_* が True のときのみ有効。
+# リクエストサイズ上限 HTTP_MAX_REQ_SIZE は常に有効（下記参照）。
+# ============================
+
+ENABLE_IP_FILTER      = False
+# ログイン後の通行に key=SECRET_KEY を使う。False だと /admin 直打ちも通る。
+ENABLE_TOKEN_CHECK    = True
+ENABLE_RATE_LIMIT     = False
+# True: 上限超過を 413 で拒否 / False: 400 で拒否（いずれも HTTP_MAX_REQ_SIZE で打ち切り）
+ENABLE_REQ_SIZE_LIMIT = False
+ENABLE_TIMEOUT        = False
+
+# ============================
+# セキュリティ機能設定
+# http_server.py / http_admin.py / http_maintain.py で参照
+# （IP / token / rate / timeout は対応する ENABLE_* が True のときのみ有効）
+# HTTP_MAX_REQ_SIZE は ENABLE に関係なく常に受信上限として使う
+# ============================
+
+ALLOWED_IP            = "192.168.4.3"
+SECRET_KEY            = "change-me"
+# ログイン認証ファイル（本体フラッシュ上）: /storage/auth.cfg
+# 形式は 1 行 user:password（# 始まりと空行は無視）
+# 例: admin:change-me
+HTTP_RATE_LIMIT_SEC   = 1
+# HTTP リクエスト全体（ヘッダ＋multipart ボディ）の上限。
+# Pico W では大きすぎると OutOfMemory になる。既定 20480（約 20KB）を推奨。
+# ファイル本体はこの値からヘッダ分を引いたサイズ以下。
+HTTP_MAX_REQ_SIZE     = 20480
+# アップロード中に切れないよう、ENABLE_TIMEOUT=True のときは長めに
+HTTP_TIMEOUT_SEC      = 30
+# 管理画面からの新規アップロードを許可する拡張子（既存パス上書き put には適用しない）
+HTTP_UPLOAD_ALLOWED_EXT = (".py", ".cfg", ".txt")
+
+# ============================
+# 時刻設定（RTC）
+# ============================
+
+ENABLE_CLOCK_SET = True
+CLOCK_YEAR       = 2026
+CLOCK_MONTH      = 1
+CLOCK_DAY        = 1
+CLOCK_HOUR       = 0
+CLOCK_MINUTE     = 0
+CLOCK_SECOND     = 0
+
+# ============================
+# ログアーカイブ（毎日・前日分を logs/ へ）
+# ============================
+
+ARCHIVE_HOUR   = 0
+ARCHIVE_MINUTE = 5
+
+# ============================
+# ディスプレイスリープ
+# ============================
+
+DISPLAY_SLEEP_SEC = 180
+
+# 警告表示中はスリープしない FSM 状態
+DISPLAY_SLEEP_WARNING_STATES = frozenset({
+    "OPEN",
+    "AUTH_PENDING",
+    "ENTRY_PENDING",
+    "ALARM",
+})
+
+# ============================
+# 入室理由ラベル（ログ EVENT:ENTRY_REASON:* に記録）
+# キーは内部イベント名（ENTRY_BTN1〜4）、値は任意の文字列
+# ============================
+
+ENTRY_REASON_LABELS = {
+    "ENTRY_BTN1": "INSPECT",
+    "ENTRY_BTN2": "MAINT",
+    "ENTRY_BTN3": "AUDIT",
+    "ENTRY_BTN4": "OTHER",
+}
+
+# ============================
+# RFID カード登録（UIDタプル → 所有者名）
+# 認証ホワイトリスト兼ログ表示名。UID は rfid_reader.read() の戻り値と同じタプル。
+# 例: 実機でカードをかざし、ログやテストで得たタプルをそのままキーにする。
+# ============================
+
+RFID_CARDS = {
+    (0, 0, 0, 0, 0): "サンプルユーザー",
+}

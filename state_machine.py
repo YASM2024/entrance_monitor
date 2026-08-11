@@ -2,6 +2,8 @@ import time
 import logger
 import context
 import timer_mgr
+import config
+import rfid_reader
 
 from http_server import start_http_server, stop_http_server
 
@@ -17,6 +19,10 @@ EXIT         = "EXIT"
 ALARM        = "ALARM"
 
 _state = IDLE
+
+EXIT_TIMEOUT_SEC = 12
+ENTRY_PENDING_TIMEOUT_SEC = 30
+EXIT_QUIET_AFTER_CLOSE_SEC = 2
 
 
 # =========================
@@ -51,8 +57,47 @@ def _set_state(new_state):
     logger.info(f"STATE {old} -> {new_state}")
 
 
+def _enter_entry_pending():
+    timer_mgr.stop("OPEN")
+    timer_mgr.stop("AUTH")
+    _set_state(ENTRY_PENDING)
+    timer_mgr.start("ENTRY_PENDING", ENTRY_PENDING_TIMEOUT_SEC)
+
+
 def _now():
     return time.time()
+
+
+def _exit_quiet_after_close():
+    close_at = context.exit_door_close_time()
+    if not close_at:
+        return False
+
+    now = _now()
+    if (now - close_at) < EXIT_QUIET_AFTER_CLOSE_SEC:
+        return False
+
+    if context.last_pir_time() > close_at:
+        return False
+
+    return True
+
+
+def _finish_exit_success():
+    timer_mgr.stop("EXIT")
+    _set_state(IDLE)
+    logger.log_event("EXIT_SUCCESS")
+
+
+def _finish_exit_aborted():
+    timer_mgr.stop("EXIT")
+    _enter_entry_pending()
+    logger.log_event("EXIT_ABORTED")
+
+
+def _try_exit_success():
+    if context.exit_door_cycle() and _exit_quiet_after_close():
+        _finish_exit_success()
 
 
 # =========================
@@ -92,8 +137,8 @@ def handle(event, addinfo = None):
             return
 
         if event == "RFID_OK":
-            _set_state(ENTRY_PENDING)
-            logger.log_event(f"RFID_OK({addinfo})")
+            _enter_entry_pending()
+            logger.log_event("RFID_OK({})".format(rfid_reader.format_log_uid(addinfo)))
             context.inc_entry()
             return
 
@@ -106,8 +151,8 @@ def handle(event, addinfo = None):
     if _state == AUTH_PENDING:
 
         if event == "RFID_OK":
-            _set_state(ENTRY_PENDING)
-            logger.log_event(f"RFID_OK({addinfo})")
+            _enter_entry_pending()
+            logger.log_event("RFID_OK({})".format(rfid_reader.format_log_uid(addinfo)))
             context.inc_entry()
             return
 
@@ -126,8 +171,10 @@ def handle(event, addinfo = None):
     if _state == ENTRY_PENDING:
 
         if event in ("ENTRY_BTN1", "ENTRY_BTN2", "ENTRY_BTN3", "ENTRY_BTN4"):
+            timer_mgr.stop("ENTRY_PENDING")
             _set_state(ENTRY)
-            logger.log_event(f"ENTRY_REASON:{event}")
+            label = config.ENTRY_REASON_LABELS.get(event, event)
+            logger.log_event("ENTRY_REASON:{}".format(label))
             return
 
         if event == "TIMEOUT_ENTRY_PENDING":
@@ -149,7 +196,7 @@ def handle(event, addinfo = None):
             logger.log_event("EXIT")
 
             context.reset_exit()
-            timer_mgr.start("EXIT", 8)
+            timer_mgr.start("EXIT", EXIT_TIMEOUT_SEC)
 
             return
 
@@ -176,21 +223,28 @@ def handle(event, addinfo = None):
             return
 
         if event == "DOOR_CLOSE":
-            context.mark_exit_cycle()
+            if context.exit_door_opened():
+                context.mark_exit_door_closed()
+                _try_exit_success()
             return
 
         if event == "PIR_DETECT":
-            context.update_pir()
+            if context.exit_door_cycle():
+                context.note_exit_pir_after_close()
+            else:
+                context.note_exit_pir_before_close()
+            _try_exit_success()
             return
 
         if event == "TIMEOUT_EXIT":
-
-            if (_now() - context.last_pir_time()) < 5:
-                _set_state(ENTRY_PENDING)
-                logger.log_event("EXIT_ABORTED")
+            if context.exit_door_cycle() and _exit_quiet_after_close():
+                _finish_exit_success()
+            elif context.exit_door_cycle():
+                _finish_exit_aborted()
+            elif context.last_pir_time() and (_now() - context.last_pir_time()) < 5:
+                _finish_exit_aborted()
             else:
-                _set_state(IDLE)
-                logger.log_event("EXIT_SUCCESS")
+                _finish_exit_success()
 
             return
 
@@ -201,7 +255,7 @@ def handle(event, addinfo = None):
     if _state == ALARM:
 
         if event == "RFID_OK":
-            _set_state(ENTRY_PENDING)
+            _enter_entry_pending()
             logger.log_event("RECOVER")
             return
 
