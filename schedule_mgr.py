@@ -83,10 +83,15 @@ def save_clock(year, month, day, hour, minute, second=0):
 def load_clock():
     try:
         with open(_CLOCK_FILE) as f:
-            parts = f.read().strip().split(",")
-        if len(parts) < 6:
-            return None
-        return tuple(int(parts[i]) for i in range(6))
+            for line in f:
+                line = line.strip()
+                if not line or line[0] == "#":
+                    continue
+                parts = line.split(",")
+                if len(parts) < 6:
+                    return None
+                return tuple(int(parts[i]) for i in range(6))
+        return None
     except (OSError, ValueError):
         return None
 

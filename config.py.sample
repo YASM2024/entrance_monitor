@@ -40,7 +40,7 @@ ALLOWED_IP            = "192.168.4.3"
 SECRET_KEY            = "change-me"
 # ログイン認証ファイル（本体フラッシュ上）: /storage/auth.cfg
 # 形式は 1 行 user:password（# 始まりと空行は無視）
-# 例: admin:change-me
+# サンプル: storage/auth.cfg.sample
 HTTP_RATE_LIMIT_SEC   = 1
 # HTTP リクエスト全体（ヘッダ＋multipart ボディ）の上限。
 # Pico W では大きすぎると OutOfMemory になる。既定 20480（約 20KB）を推奨。
@@ -55,6 +55,8 @@ HTTP_UPLOAD_ALLOWED_EXT = (".py", ".cfg", ".txt")
 # 時刻設定（RTC）
 # ============================
 
+# /storage/clock.cfg があればそちら優先（サンプル: storage/clock.cfg.sample）
+# 形式: year,month,day,hour,minute,second
 ENABLE_CLOCK_SET = True
 CLOCK_YEAR       = 2026
 CLOCK_MONTH      = 1

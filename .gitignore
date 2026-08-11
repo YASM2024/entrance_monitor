@@ -1,5 +1,6 @@
 config.py
 auth.cfg
+clock.cfg
 .cursor/
 manual/
 tools/

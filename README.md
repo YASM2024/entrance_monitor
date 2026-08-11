@@ -5,15 +5,17 @@
 
 1. `config.py.sample` を `config.py` にコピーする
 2. `config.py` を環境に合わせて編集する（WiFi AP、RFID カード登録など）
-3. 本体に `/storage/auth.cfg` を置く（`auth.cfg.sample` をコピーして編集）
+3. 本体に `/storage/auth.cfg` を置く（`storage/auth.cfg.sample` をコピーして編集）
+4. 必要なら本体に `/storage/clock.cfg` を置く（`storage/clock.cfg.sample` をコピーして編集）
 
 `config.py` は git 管理外です。設定項目の追加・デフォルト値の変更は `config.py.sample` を更新してください。
 
 ### ログイン（TOP）
 
 - URL: `http://<IP>/`（ログイン画面）
-- 認証ファイル: `/storage/auth.cfg`（1行 `user:password`。`#` 行・空行は無視）
+- 認証ファイル: `/storage/auth.cfg`（1行 `user:password`。`#` 行・空行は無視）。サンプル: `storage/auth.cfg.sample`
 - 例: `admin:change-me`
+- 時刻ファイル: `/storage/clock.cfg`（1行 `year,month,day,hour,minute,second`）。サンプル: `storage/clock.cfg.sample`
 - 成功後は `/admin?key=<SECRET_KEY>` へ誘導（既存の token 機構を流用）
 - ログ一覧: `/logs`
 - **`ENABLE_TOKEN_CHECK = True` を推奨**（False だと `/admin` 直打ちでログインを回避できる）

@@ -1,0 +1,6 @@
+# このファイルを本体の /storage/clock.cfg にコピーして使います。
+# 形式: year,month,day,hour,minute,second（1行）
+# # で始まる行と空行は無視されます。
+# 起動時に RTC へ反映されます（storage 優先、無い場合は config.py の CLOCK_*）。
+
+2026,1,1,0,0,0
